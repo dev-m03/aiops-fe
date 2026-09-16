@@ -175,13 +175,13 @@ const fragmentShader = `
           p.xz = vec2(rotC * p.x - rotS * p.z, rotS * p.x + rotC * p.z);
 
           vec3 q = p;
-          q.y = p.y * uPillarHeight + uTime;
+          q.y = p.y * uPillarHeight + uTime * 0.4;
           
           float freq = 1.0;
           float amp = 1.0;
           for(int j = 0; j < WAVE_ITER; j++) {
             q.xz = vec2(uWaveCos * q.x - uWaveSin * q.z, uWaveSin * q.x + uWaveCos * q.z);
-            q += cos(q.zxy * freq - uTime * float(j) * 2.0) * amp;
+            q += cos(q.zxy * freq - uTime * (float(j) + 1.0) * 1.5) * amp;
             freq *= 2.0;
             amp *= 0.5;
           }
@@ -200,10 +200,10 @@ const fragmentShader = `
           if(t > 50.0) break;
         }
 
-        float widthNorm = uPillarWidth / 3.0;
+        float widthNorm = max(uPillarWidth / 3.0, 0.001);
         col = tanh(col * uGlowAmount / widthNorm);
         
-        col -= fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) / 15.0 * uNoiseIntensity;
+        col -= fract(sin(dot(gl_FragCoord.xy + uTime * 15.0, vec2(12.9898, 78.233))) * 43758.5453) / 15.0 * uNoiseIntensity;
         
         vec3 result = clamp(col * uIntensity, 0.0, 1.0);
         if (uLightMode > 0.5) {
@@ -219,12 +219,8 @@ const fragmentShader = `
 
     // Pre-compute wave rotation values
     const waveAngle = 0.4;
-    const waveSinValues = new Float32Array(4);
-    const waveCosValues = new Float32Array(4);
-    for (let i = 0; i < 4; i++) {
-      waveSinValues[i] = Math.sin(waveAngle);
-      waveCosValues[i] = Math.cos(waveAngle);
-    }
+    const waveSinValue = Math.sin(waveAngle);
+    const waveCosValue = Math.cos(waveAngle);
 
     // Pre-compute pillar rotation
     const pillarRotRad = (pillarRotation * Math.PI) / 180.0;
@@ -236,7 +232,7 @@ const fragmentShader = `
       fragmentShader,
       uniforms: {
         uTime: { value: 0 },
-        uResolution: { value: new THREE.Vector2(width, height) },
+        uResolution: { value: new THREE.Vector2(width || 1, height || 1) },
         uMouse: { value: mouseRef.current },
         uTopColor: { value: parseColor(topColor) },
         uBottomColor: { value: parseColor(bottomColor) },
@@ -246,13 +242,12 @@ const fragmentShader = `
         uPillarWidth: { value: pillarWidth },
         uPillarHeight: { value: pillarHeight },
         uNoiseIntensity: { value: noiseIntensity },
-        uPillarRotation: { value: pillarRotation },
         uRotCos: { value: 1.0 },
         uRotSin: { value: 0.0 },
         uPillarRotCos: { value: pillarRotCos },
         uPillarRotSin: { value: pillarRotSin },
-        uWaveSin: { value: waveSinValues },
-        uWaveCos: { value: waveCosValues },
+        uWaveSin: { value: waveSinValue },
+        uWaveCos: { value: waveCosValue },
         uLightMode: { value: lightMode ? 1 : 0 }
       },
       transparent: true,
@@ -287,7 +282,7 @@ const fragmentShader = `
       container.addEventListener('mousemove', handleMouseMove, { passive: true });
     }
 
-    // Animation loop with fixed timestep
+    // Animation loop with delta time
     let lastTime = performance.now();
     const targetFPS = effectiveQuality === 'low' ? 30 : 60;
     const frameTime = 1000 / targetFPS;
@@ -295,46 +290,41 @@ const fragmentShader = `
     const animate = (currentTime: number) => {
       if (!materialRef.current || !rendererRef.current || !sceneRef.current || !cameraRef.current) return;
 
-      const deltaTime = currentTime - lastTime;
+      const elapsed = currentTime - lastTime;
 
-      if (deltaTime >= frameTime) {
-        timeRef.current += 0.016 * rotationSpeedRef.current;
+      if (elapsed >= frameTime) {
+        const delta = Math.min(elapsed / 1000, 0.1);
+        timeRef.current += delta * rotationSpeedRef.current;
         materialRef.current.uniforms.uTime.value = timeRef.current;
 
         // Pre-compute rotation on CPU
-        const rotAngle = timeRef.current * 0.3;
+        const rotAngle = timeRef.current;
         materialRef.current.uniforms.uRotCos.value = Math.cos(rotAngle);
         materialRef.current.uniforms.uRotSin.value = Math.sin(rotAngle);
 
         rendererRef.current.render(sceneRef.current, cameraRef.current);
-        lastTime = currentTime - (deltaTime % frameTime);
+        lastTime = currentTime - (elapsed % frameTime);
       }
 
       rafRef.current = requestAnimationFrame(animate);
     };
     rafRef.current = requestAnimationFrame(animate);
 
-    // Handle resize with debouncing
-    let resizeTimeout: number | null = null;
-    const handleResize = () => {
-      if (resizeTimeout) {
-        clearTimeout(resizeTimeout);
+    // Handle container resize with ResizeObserver
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width: newWidth, height: newHeight } = entry.contentRect;
+        if (newWidth > 0 && newHeight > 0 && rendererRef.current && materialRef.current) {
+          rendererRef.current.setSize(newWidth, newHeight);
+          materialRef.current.uniforms.uResolution.value.set(newWidth, newHeight);
+        }
       }
-
-      resizeTimeout = window.setTimeout(() => {
-        if (!rendererRef.current || !materialRef.current || !containerRef.current) return;
-        const newWidth = containerRef.current.clientWidth;
-        const newHeight = containerRef.current.clientHeight;
-        rendererRef.current.setSize(newWidth, newHeight);
-        materialRef.current.uniforms.uResolution.value.set(newWidth, newHeight);
-      }, 150);
-    };
-
-    window.addEventListener('resize', handleResize, { passive: true });
+    });
+    resizeObserver.observe(container);
 
     // Cleanup
     return () => {
-      window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       if (interactive) {
         container.removeEventListener('mousemove', handleMouseMove);
       }
@@ -362,7 +352,7 @@ const fragmentShader = `
       geometryRef.current = null;
       rafRef.current = null;
     };
-  }, [webGLSupported, quality]);
+  }, [webGLSupported, quality, interactive]);
 
   useEffect(() => {
     rotationSpeedRef.current = rotationSpeed;
