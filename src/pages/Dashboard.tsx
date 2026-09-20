@@ -5,7 +5,7 @@ import { supabase } from "../lib/supabase";
 import IncidentsList from "../components/IncidentsList";
 import LeftRail, { type DashboardProject } from "../components/dashboard/LeftRail";
 import RightRail, { type ActivityItem } from "../components/dashboard/RightRail";
-import { getCachedData, setCachedData, isSessionRefreshed, markSessionRefetched } from "../lib/cache";
+import { getCachedData, setCachedData, markSessionRefetched } from "../lib/cache";
 import { Check, Bolt, Sparkles, Eye, EyeOff, Copy, ShieldCheck, KeyRound, Loader2, Folder, PanelsTopLeft, Info } from "lucide-react";
 
 export default function Dashboard({
@@ -71,16 +71,24 @@ export default function Dashboard({
     });
   };
 
-  // Mobile carousel slide state: 0 = Left Rail (Projects), 1 = Center Stage (Workspace - default), 2 = Right Rail (System)
   const [mobileSlide, setMobileSlide] = useState<number>(1);
   const createInputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const watchdogTimerRef = useRef<number | null>(null);
 
   const addActivity = useCallback((act: ActivityItem) => {
     setActivities((prev) => [act, ...prev.slice(0, 8)]);
   }, []);
 
   // Fetch projects and incidents directly from backend API (per authenticated user) with offline caching
-  const loadData = useCallback(async (forceRefresh = false) => {
+  const loadData = useCallback(async (forceRefresh = false, isSilent = false) => {
+    // Abort previous in-flight sync if any
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       setError(null);
 
@@ -101,9 +109,11 @@ export default function Dashboard({
         setCachedData(userId, "user_profile", { id: userId, email });
       }
 
-      // 1. Immediately read cached project details and incidents if present
+      // 1. Immediately read cached project details and incidents if present (Stale-While-Revalidate)
       const cachedProjects = getCachedData<Project[]>(userId, "projects");
       const cachedIncidents = getCachedData<Incident[]>(userId, "incidents");
+
+      const hasUsableCache = Boolean(cachedProjects && cachedProjects.length > 0);
 
       if (cachedProjects && cachedProjects.length > 0) {
         const sortedCached = sortProjectsNewestFirst(cachedProjects);
@@ -121,20 +131,34 @@ export default function Dashboard({
         setIncidents(cachedIncidents);
       }
 
-      // If offline cache exists and this is an SPA navigation (not force refresh / reload), show immediately
-      const isReload = isSessionRefreshed();
-      if (!isReload && !forceRefresh && cachedProjects && cachedIncidents) {
+      // If we have cached data, immediately dismiss the sync screen so the UI is 100% responsive
+      if (hasUsableCache && !forceRefresh) {
         setIsSyncing(false);
         setIsSyncFading(false);
-        return;
+      } else if (!isSilent) {
+        setIsSyncing(true);
+        setIsSyncFading(false);
       }
 
-      setIsSyncing(true);
-      setIsSyncFading(false);
+      // Failsafe Watchdog: Ensure sync screen NEVER stays visible longer than 4.5s under any condition
+      if (watchdogTimerRef.current) {
+        window.clearTimeout(watchdogTimerRef.current);
+      }
+      watchdogTimerRef.current = window.setTimeout(() => {
+        setIsSyncFading(true);
+        setTimeout(() => {
+          setIsSyncing(false);
+          setIsSyncFading(false);
+        }, 160);
+      }, 4500);
 
-      // 2. Fetch user-scoped projects and incidents from backend
+      // 2. Fetch user-scoped projects and incidents from backend with timeout/signal protection
       try {
-        const fetchedProjects = await fetchProjects();
+        const [fetchedProjects, fetchedIncidents] = await Promise.all([
+          fetchProjects(controller.signal),
+          fetchIncidents(controller.signal),
+        ]);
+
         const sortedProjects = sortProjectsNewestFirst(fetchedProjects || []);
         setProjects(sortedProjects);
 
@@ -150,7 +174,6 @@ export default function Dashboard({
           setActiveProject(null);
         }
 
-        const fetchedIncidents = await fetchIncidents();
         setIncidents(fetchedIncidents || []);
 
         // Store in isolated user cache for offline availability
@@ -158,15 +181,20 @@ export default function Dashboard({
         setCachedData(userId, "incidents", fetchedIncidents || []);
         markSessionRefetched();
 
-        addActivity({
-          id: `act-${Date.now()}`,
-          title: "Session Synchronized",
-          subtitle: `Loaded ${sortedProjects.length} project(s) & ${fetchedIncidents.length} incident(s)`,
-          time: "Just now",
-          type: "health",
-        });
+        if (forceRefresh || !hasUsableCache) {
+          addActivity({
+            id: `act-${Date.now()}`,
+            title: "Session Synchronized",
+            subtitle: `Loaded ${sortedProjects.length} project(s) & ${fetchedIncidents?.length || 0} incident(s)`,
+            time: "Just now",
+            type: "health",
+          });
+        }
       } catch (networkErr: any) {
-        console.warn("Backend fetch failed (likely offline):", networkErr);
+        // If aborted by a new request or visibility change, ignore gracefully
+        if (controller.signal.aborted) return;
+
+        console.warn("Backend fetch failed or timed out (using cache fallback):", networkErr);
         if (cachedProjects || cachedIncidents) {
           markSessionRefetched();
           addActivity({
@@ -181,10 +209,15 @@ export default function Dashboard({
         }
       }
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       console.error("Failed to load dashboard data:", err);
       setError(err.message || "Failed to load projects from backend API");
     } finally {
-      // Smooth fade-out of sync screen before swift dashboard fade-in
+      if (watchdogTimerRef.current) {
+        window.clearTimeout(watchdogTimerRef.current);
+        watchdogTimerRef.current = null;
+      }
+      // Smooth fade-out of sync screen
       setIsSyncFading(true);
       setTimeout(() => {
         setIsSyncing(false);
@@ -195,6 +228,33 @@ export default function Dashboard({
 
   useEffect(() => {
     loadData();
+
+    // Lifecycle listener: when waking from RAM/background or returning to tab, perform a silent background re-sync
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        loadData(false, true);
+      }
+    };
+
+    const handlePageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) {
+        loadData(false, true);
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handlePageShow);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pageshow", handlePageShow);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      if (watchdogTimerRef.current) {
+        window.clearTimeout(watchdogTimerRef.current);
+      }
+    };
   }, [loadData]);
 
   const handleCreateProject = async () => {
@@ -446,7 +506,10 @@ export default function Dashboard({
 
         {/* SENSITIVE API Key Card with MASKING and Security Notice */}
         {activeProject?.api_key && (
-          <div className="mt-6 rounded-xl border border-green-400/20 bg-green-400/[0.06] p-4 backdrop-blur-xl sm:p-6">
+          <div
+            key={activeProject.id}
+            className="mt-6 rounded-xl border border-green-400/20 bg-green-400/[0.06] p-4 backdrop-blur-xl sm:p-6 animate-smooth-scale-up"
+          >
             <div className="flex items-center justify-between gap-3">
               <h3 className="flex items-center gap-2 font-mono text-xs sm:text-sm font-bold uppercase tracking-wide text-green-300">
                 <ShieldCheck className="h-4 w-4 text-green-400 shrink-0" />
@@ -523,6 +586,15 @@ export default function Dashboard({
       <IncidentsList
         activeProject={activeProject}
         selectedProjectId={selectedProjectIdFilter}
+        selectedProjectName={
+          selectedProjectIdFilter
+            ? projects.find((p) => p.id === selectedProjectIdFilter)?.name || activeProject?.name
+            : null
+        }
+        onDeselectProject={() => {
+          setSelectedProjectIdFilter(null);
+          setShowAllChip(true);
+        }}
         onActivityAdd={addActivity}
         showAllChip={showAllChip}
       />

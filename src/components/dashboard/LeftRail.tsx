@@ -116,14 +116,15 @@ export default function LeftRail({
 
         {/* Project List with scrollable affordance if > 5 projects */}
         <div
-          className={`mt-3 flex flex-col gap-2 ${
+          key={`projects-list-${projects.length}`}
+          className={`mt-3 flex flex-col gap-2 animate-smooth-scale-up ${
             projects.length > 5
               ? "max-h-[320px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-white/20"
               : ""
           }`}
         >
           {projects.length === 0 ? (
-            <p className="py-4 text-center font-mono text-xs text-white/40">
+            <p className="py-4 text-center font-mono text-xs text-white/40 animate-smooth-scale-up">
               No projects created yet
             </p>
           ) : (
@@ -135,7 +136,7 @@ export default function LeftRail({
                 <button
                   key={proj.id}
                   onClick={() => onSelectProject(proj)}
-                  className={`group relative flex items-center justify-between rounded-xl border p-3.5 sm:p-3 text-left transition-all duration-200 shrink-0 ${
+                  className={`group relative flex items-center justify-between rounded-xl border p-3.5 sm:p-3 text-left transition-all duration-200 shrink-0 animate-smooth-scale-up ${
                     isSelected
                       ? "border-green-400/40 bg-green-400/[0.08] shadow-[0_0_20px_rgba(34,197,94,0.08)]"
                       : "border-white/10 bg-black/40 hover:border-white/20 hover:bg-white/[0.03]"

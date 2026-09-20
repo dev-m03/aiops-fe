@@ -72,8 +72,13 @@ export default function App() {
     // Load last visited page from localStorage
     const lastPage = localStorage.getItem("lastPage") as PageState | null;
 
-    supabase.auth
-      .getSession()
+    // Timeout guard for Supabase auth initialization (e.g. 3.5s max)
+    const sessionPromise = supabase.auth.getSession();
+    const timeoutPromise = new Promise<{ data: { session: null } }>((resolve) =>
+      setTimeout(() => resolve({ data: { session: null } }), 3500)
+    );
+
+    Promise.race([sessionPromise, timeoutPromise])
       .then(({ data }) => {
         setSession(data?.session ?? null);
 

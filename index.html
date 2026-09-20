@@ -14,6 +14,11 @@
     <!-- Web App Manifest -->
     <link rel="manifest" href="/manifest.webmanifest" />
 
+    <!-- Security & Hardening Meta Tags -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https: blob:; connect-src 'self' https://wrwmwfyoocogxlortefv.supabase.co wss://wrwmwfyoocogxlortefv.supabase.co https://aiops-api.onrender.com https: wss:; font-src 'self' https: data:; object-src 'none'; base-uri 'self';" />
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+
     <!-- Theme & Color Settings -->
     <meta name="theme-color" content="#000000" />
     <meta name="color-scheme" content="dark" />
