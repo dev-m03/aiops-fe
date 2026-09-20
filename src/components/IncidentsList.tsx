@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Bug,
   CloudSync,
+  X,
 } from "lucide-react";
 
 type Analysis = {
@@ -32,6 +33,8 @@ interface IncidentsListProps {
   onServicesCountChange?: (count: number) => void;
   onActivityAdd?: (activity: any) => void;
   selectedProjectId?: string | null;
+  selectedProjectName?: string | null;
+  onDeselectProject?: () => void;
   showAllChip?: boolean;
 }
 
@@ -41,6 +44,8 @@ export default function IncidentsList({
   onServicesCountChange,
   onActivityAdd,
   selectedProjectId,
+  selectedProjectName,
+  onDeselectProject,
   showAllChip = false,
 }: IncidentsListProps) {
   const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -209,15 +214,27 @@ export default function IncidentsList({
         <h2 className="font-mono text-2xl font-bold uppercase leading-[1.15] tracking-tight text-white sm:text-3xl">
           Live Incidents
         </h2>
-        {showAllChip && (
-          <span className="animate-fade-swift inline-flex items-center rounded-md border border-green-400/30 bg-green-400/10 px-2.5 py-0.5 font-mono text-[11px] font-bold uppercase tracking-wider text-green-300 shadow-[0_0_10px_rgba(74,222,128,0.15)]">
-            ALL
-          </span>
+        {selectedProjectId ? (
+          <button
+            type="button"
+            onClick={onDeselectProject}
+            title="Deselect project (Show all incidents)"
+            className="animate-smooth-scale-up group inline-flex items-center gap-1.5 rounded-md border border-green-400/35 bg-green-400/10 px-2.5 py-0.5 font-mono text-[11px] font-bold uppercase tracking-wider text-green-300 shadow-[0_0_12px_rgba(74,222,128,0.15)] hover:bg-green-400/20 hover:border-green-400/50 transition-all cursor-pointer select-none max-w-[220px]"
+          >
+            <span className="truncate">{selectedProjectName || activeProject?.name || "Selected"}</span>
+            <X className="h-3 w-3 shrink-0 text-green-400/70 group-hover:text-green-200 transition-colors" />
+          </button>
+        ) : (
+          (showAllChip || !selectedProjectId) && (
+            <span className="animate-smooth-scale-up inline-flex items-center rounded-md border border-green-400/30 bg-green-400/10 px-2.5 py-0.5 font-mono text-[11px] font-bold uppercase tracking-wider text-green-300 shadow-[0_0_10px_rgba(74,222,128,0.15)]">
+              ALL
+            </span>
+          )
         )}
       </div>
 
       {error && (
-        <div className="mt-5 rounded-lg border border-red-400/25 bg-red-400/10 px-4 py-3 text-sm text-red-300">
+        <div className="mt-5 rounded-lg border border-red-400/25 bg-red-400/10 px-4 py-3 text-sm text-red-300 animate-smooth-scale-up">
           Error: {error}
         </div>
       )}
@@ -226,7 +243,7 @@ export default function IncidentsList({
       {filteredIncidents.length === 0 && !error && (
         hasTelemetry ? (
           /* Genuinely Healthy State */
-          <div className="mt-6 rounded-xl border border-green-500/20 bg-green-500/[0.04] p-6 text-center backdrop-blur-sm">
+          <div className="mt-6 rounded-xl border border-green-500/20 bg-green-500/[0.04] p-6 text-center backdrop-blur-sm animate-smooth-scale-up">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-green-500/10 text-green-400 border border-green-500/30 shadow-[0_0_20px_rgba(34,197,94,0.15)]">
               <ShieldCheck className="h-6 w-6" />
             </div>
@@ -243,7 +260,7 @@ export default function IncidentsList({
           </div>
         ) : (
           /* No Telemetry Stream Yet - Setup Progression */
-          <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.02] p-5 sm:p-6 backdrop-blur-sm">
+          <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.02] p-5 sm:p-6 backdrop-blur-sm animate-smooth-scale-up">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-white/10">
               <div>
                 <span className="font-mono text-xs font-bold uppercase tracking-wider text-white flex items-center gap-2">
@@ -300,14 +317,14 @@ export default function IncidentsList({
       )}
 
       {/* Incidents List */}
-      <div className="mt-6 space-y-4">
+      <div key={`incidents-wrapper-${filteredIncidents.length}-${selectedProjectId || 'all'}`} className="mt-6 space-y-4 animate-smooth-scale-up">
         {filteredIncidents.map((incident) => {
           const analysis = analysisByIncident[incident.id];
 
           return (
             <div
               key={incident.id}
-              className="rounded-xl border border-white/10 bg-white/[0.03] p-5 backdrop-blur-sm transition-colors hover:border-green-400/30 hover:bg-white/[0.05]"
+              className="rounded-xl border border-white/10 bg-white/[0.03] p-5 backdrop-blur-sm transition-colors hover:border-green-400/30 hover:bg-white/[0.05] animate-smooth-scale-up"
             >
               <div className="flex items-start justify-between gap-4">
                 <div>

@@ -26,7 +26,11 @@ export function resetSessionRefetchState() {
 }
 
 function calculateByteSize(str: string): number {
-  return new Blob([str]).size;
+  try {
+    return new Blob([str]).size;
+  } catch {
+    return str.length;
+  }
 }
 
 export function getCachedData<T>(userId: string, key: string): T | null {
@@ -44,7 +48,7 @@ export function getCachedData<T>(userId: string, key: string): T | null {
 
     const entry: CacheEntry<T> = JSON.parse(raw);
 
-    // Verify user ownership
+    // Verify user ownership to prevent cross-account cache leakage
     if (entry.userId !== userId) {
       localStorage.removeItem(fullKey);
       return null;
@@ -89,7 +93,7 @@ export function setCachedData<T>(userId: string, key: string, data: T): void {
 
     // Check if single payload or total exceeds allowed cache size
     if (sizeBytes > settings.cacheSizeBytes) {
-      console.warn(`Payload size (${(sizeBytes / 1024).toFixed(1)} KB) exceeds configured limit (${(settings.cacheSizeBytes / 1024).toFixed(1)} KB)`);
+      console.warn(`Payload size exceeds configured limit`);
       return;
     }
 
@@ -162,3 +166,4 @@ export function clearUserCache(userId?: string): void {
 export function clearAllCache(): void {
   clearUserCache();
 }
+

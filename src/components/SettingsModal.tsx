@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import Logo from "./Logo";
-import { ArrowLeft, LogOut, Check, Sliders, HardDrive, Clock } from "lucide-react";
+import { ArrowLeft, LogOut, Check, Sliders, HardDrive, Clock, Trash } from "lucide-react";
 import {
   loadSettings,
   saveSettings,
@@ -10,12 +10,30 @@ import {
   type AppSettings,
   type ThemePaletteId,
 } from "../lib/settings";
+import { clearAllCache, resetSessionRefetchState } from "../lib/cache";
 
 interface SettingsModalProps {
   userEmail?: string;
   onClose: () => void;
   onLogout: () => void;
   isClosing?: boolean;
+}
+
+function CheckLine({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <polyline points="4 11 9 16 20 5" />
+      <line x1="4" y1="20" x2="20" y2="20" />
+    </svg>
+  );
 }
 
 export default function SettingsModal({
@@ -86,21 +104,44 @@ export default function SettingsModal({
   };
 
   const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setDurationInput(val);
+    setDurationInput(e.target.value);
+  };
+
+  const handleSaveDuration = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const val = durationInput.trim();
     const parsedMinutes = parseDurationToMinutes(val);
     const next = {
       ...settings,
-      cacheDurationText: val,
+      cacheDurationText: val || `${parsedMinutes}m`,
       cacheDurationMinutes: parsedMinutes,
     };
     setSettings(next);
     saveSettings(next);
+    showFeedback();
   };
 
   const showFeedback = () => {
     setSaveToast(true);
     setTimeout(() => setSaveToast(false), 1500);
+  };
+
+  const handleClearCache = () => {
+    try {
+      clearAllCache();
+      resetSessionRefetchState();
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith("aiops_cache_")) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch (e) {
+      console.warn("Error clearing cache:", e);
+    }
+    window.location.reload();
   };
 
   const parsedMinutes = parseDurationToMinutes(durationInput);
@@ -339,7 +380,7 @@ export default function SettingsModal({
                     </div>
                   </div>
 
-                  {/* Item 3: Duration with Text Input Field */}
+                  {/* Item 3: Duration with Text Input Field & Save Button */}
                   <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3.5 backdrop-blur-sm space-y-2">
                     <div className="flex items-center justify-between">
                       <label className="font-mono text-xs font-semibold text-white">
@@ -353,13 +394,22 @@ export default function SettingsModal({
                       </span>
                     </div>
 
-                    <input
-                      type="text"
-                      value={durationInput}
-                      onChange={handleDurationChange}
-                      placeholder="e.g. 30m, 1h, 24h"
-                      className={`${field} font-mono text-xs`}
-                    />
+                    <form onSubmit={handleSaveDuration} className="duration-input-container">
+                      <input
+                        type="text"
+                        value={durationInput}
+                        onChange={handleDurationChange}
+                        placeholder="e.g. 30m, 1h, 24h"
+                        className={`${field} duration-input font-mono text-xs`}
+                      />
+                      <button
+                        type="submit"
+                        className="duration-btn rounded-lg border border-green-300 bg-green-400 px-3.5 py-2.5 text-xs font-semibold text-black transition-colors hover:bg-green-300 disabled:opacity-50 flex items-center justify-center gap-1.5 shrink-0"
+                      >
+                        <CheckLine className="h-3.5 w-3.5" />
+                        <span className="compact-hide">Save</span>
+                      </button>
+                    </form>
                     <p className="compact-hide text-[10px] text-white/40">
                       Data expires automatically after this duration.
                     </p>
@@ -368,18 +418,43 @@ export default function SettingsModal({
               </div>
             </div>
 
-            {/* Bottom: Log Out Button (Logs out on first press) */}
-            <div className="pt-2">
+            {/* Bottom Actions: Clear Cache & Log Out Buttons (Centred in standard mode; Icon-only aligned right in Less Verbose mode) */}
+            <div
+              className={`pt-2 flex items-center transition-all ${
+                settings.compactButtons ? "justify-end gap-2.5" : "justify-center gap-3"
+              }`}
+            >
+              {/* Clear Cache Button */}
+              <button
+                type="button"
+                onClick={handleClearCache}
+                title="Clear cache and refresh"
+                className={`rounded-lg border border-white/15 bg-white/5 text-white/80 transition-all hover:bg-white/10 hover:text-white hover:border-white/30 flex items-center justify-center gap-2 group shadow-lg ${
+                  settings.compactButtons
+                    ? "h-9 w-9 p-0 shrink-0"
+                    : "flex-1 py-2.5 px-4 text-sm font-semibold"
+                }`}
+              >
+                <Trash className="h-4 w-4 text-white/70 transition-transform group-hover:scale-110 group-hover:text-white shrink-0" />
+                {!settings.compactButtons && <span>Clear Cache</span>}
+              </button>
+
+              {/* Log Out Button */}
               <button
                 type="button"
                 onClick={() => {
                   triggerClose();
                   onLogout();
                 }}
-                className="w-full rounded-lg border border-red-500/30 bg-red-500/10 py-2.5 px-4 text-sm font-semibold text-red-300 transition-all hover:bg-red-500/20 hover:border-red-500/50 flex items-center justify-center gap-2 group shadow-lg"
+                title="Log Out"
+                className={`rounded-lg border border-red-500/30 bg-red-500/10 text-red-300 transition-all hover:bg-red-500/20 hover:border-red-500/50 flex items-center justify-center gap-2 group shadow-lg ${
+                  settings.compactButtons
+                    ? "h-9 w-9 p-0 shrink-0"
+                    : "flex-1 py-2.5 px-4 text-sm font-semibold"
+                }`}
               >
-                <LogOut className="h-4 w-4 text-red-400 transition-transform group-hover:translate-x-0.5" />
-                <span>Log Out</span>
+                <LogOut className="h-4 w-4 text-red-400 transition-transform group-hover:translate-x-0.5 shrink-0" />
+                {!settings.compactButtons && <span>Log Out</span>}
               </button>
             </div>
           </div>
