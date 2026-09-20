@@ -1,4 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from "react";
+import type { Session } from "@supabase/supabase-js";
 const LightPillar = lazy(() => import("@/components/LightPillar"));
 import {
   Rocket,
@@ -103,12 +104,12 @@ const features = [
 ];
 
 export default function Landing({
-  session: _session,
-  onAuthClick: _onAuthClick,
+  session,
+  onAuthClick,
   onDashboardClick,
   paused,
 }: {
-  session?: any;
+  session?: Session | null;
   onAuthClick: (mode: "login" | "signup") => void;
   onDashboardClick?: () => void;
   paused?: boolean;
@@ -145,11 +146,15 @@ export default function Landing({
   }, []);
 
   const handlePrimaryCta = () => {
-    onDashboardClick?.();
+    if (session) {
+      onDashboardClick?.();
+    } else {
+      onAuthClick("signup");
+    }
   };
 
   return (
-    <>
+    <div className="w-full flex flex-col gap-6 animate-fade-swift">
       {/* Hero */}
       <section className="relative w-full rounded-2xl overflow-hidden bg-black flex flex-col lg:flex-row min-h-[380px] lg:min-h-[460px]">
         <div className="flex-1 p-6 sm:p-8 lg:p-10 flex flex-col justify-center z-10">
@@ -181,7 +186,7 @@ export default function Landing({
               onClick={handlePrimaryCta}
               className="rounded-lg border border-transparent bg-green-400 px-5 py-2.5 text-sm font-medium text-black transition-colors hover:bg-green-300"
             >
-              Get a demo
+              {session ? "Dashboard" : "Get a demo"}
             </button>
 
             <button
@@ -398,7 +403,7 @@ export default function Landing({
           onClick={handlePrimaryCta}
           className="mt-6 rounded-lg border border-transparent bg-green-400 px-6 py-2.5 text-sm font-medium text-black transition-colors hover:bg-green-300"
         >
-          Start your free trial
+          {session ? "Dashboard" : "Start your free trial"}
         </button>
       </section>
 
@@ -406,6 +411,6 @@ export default function Landing({
       <footer className="mt-32 sm:mt-48 w-full py-8 text-center text-xs sm:text-sm text-white/40 border-t border-white/5">
         <p>&copy; 2026 AI Ops. All rights reserved.</p>
       </footer>
-    </>
+    </div>
   );
 }
