@@ -34,6 +34,8 @@ export default function Dashboard({
   const [userEmail, setUserEmail] = useState<string>(initialUserEmail || "");
   const [isSyncing, setIsSyncing] = useState(true);
   const [isSyncFading, setIsSyncFading] = useState(false);
+  const [isLongSync, setIsLongSync] = useState(false);
+  const [syncProgress, setSyncProgress] = useState(12);
   const [creatingProject, setCreatingProject] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
@@ -74,7 +76,19 @@ export default function Dashboard({
   const [mobileSlide, setMobileSlide] = useState<number>(1);
   const createInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const watchdogTimerRef = useRef<number | null>(null);
+  const longSyncTimerRef = useRef<number | null>(null);
+  const progressIntervalRef = useRef<number | null>(null);
+
+  const clearSyncTimers = useCallback(() => {
+    if (longSyncTimerRef.current) {
+      window.clearTimeout(longSyncTimerRef.current);
+      longSyncTimerRef.current = null;
+    }
+    if (progressIntervalRef.current) {
+      window.clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+  }, []);
 
   const addActivity = useCallback((act: ActivityItem) => {
     setActivities((prev) => [act, ...prev.slice(0, 8)]);
@@ -88,6 +102,8 @@ export default function Dashboard({
     }
     const controller = new AbortController();
     abortControllerRef.current = controller;
+
+    clearSyncTimers();
 
     try {
       setError(null);
@@ -135,24 +151,32 @@ export default function Dashboard({
       if (hasUsableCache && !forceRefresh) {
         setIsSyncing(false);
         setIsSyncFading(false);
+        setIsLongSync(false);
       } else if (!isSilent) {
         setIsSyncing(true);
         setIsSyncFading(false);
+        setIsLongSync(false);
+        setSyncProgress(14);
+
+        // Dynamic asymptotic progress simulation while data loads
+        progressIntervalRef.current = window.setInterval(() => {
+          setSyncProgress((prev) => {
+            if (prev < 40) return prev + 1.2;
+            if (prev < 65) return prev + 0.6;
+            if (prev < 80) return prev + 0.35;
+            if (prev < 90) return prev + 0.18;
+            if (prev < 95) return prev + 0.06;
+            return prev;
+          });
+        }, 100);
+
+        // If loading takes longer than 5 seconds, reveal the notice and dynamic progress bar
+        longSyncTimerRef.current = window.setTimeout(() => {
+          setIsLongSync(true);
+        }, 5000);
       }
 
-      // Failsafe Watchdog: Ensure sync screen NEVER stays visible longer than 4.5s under any condition
-      if (watchdogTimerRef.current) {
-        window.clearTimeout(watchdogTimerRef.current);
-      }
-      watchdogTimerRef.current = window.setTimeout(() => {
-        setIsSyncFading(true);
-        setTimeout(() => {
-          setIsSyncing(false);
-          setIsSyncFading(false);
-        }, 160);
-      }, 4500);
-
-      // 2. Fetch user-scoped projects and incidents from backend with timeout/signal protection
+      // 2. Fetch user-scoped projects and incidents from backend with signal protection
       try {
         const [fetchedProjects, fetchedIncidents] = await Promise.all([
           fetchProjects(controller.signal),
@@ -190,11 +214,11 @@ export default function Dashboard({
             type: "health",
           });
         }
-      } catch (networkErr: any) {
+      } catch (networkErr: unknown) {
         // If aborted by a new request or visibility change, ignore gracefully
         if (controller.signal.aborted) return;
 
-        console.warn("Backend fetch failed or timed out (using cache fallback):", networkErr);
+        console.warn("Backend fetch failed (using cache fallback):", networkErr);
         if (cachedProjects || cachedIncidents) {
           markSessionRefetched();
           addActivity({
@@ -205,26 +229,32 @@ export default function Dashboard({
             type: "health",
           });
         } else {
-          setError(networkErr.message || "Failed to load projects from backend API");
+          const msg = networkErr instanceof Error ? networkErr.message : "Failed to load projects from backend API";
+          setError(msg);
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (controller.signal.aborted) return;
       console.error("Failed to load dashboard data:", err);
-      setError(err.message || "Failed to load projects from backend API");
+      const msg = err instanceof Error ? err.message : "Failed to load projects from backend API";
+      setError(msg);
     } finally {
-      if (watchdogTimerRef.current) {
-        window.clearTimeout(watchdogTimerRef.current);
-        watchdogTimerRef.current = null;
-      }
-      // Smooth fade-out of sync screen
-      setIsSyncFading(true);
-      setTimeout(() => {
-        setIsSyncing(false);
-        setIsSyncFading(false);
-      }, 160);
+      clearSyncTimers();
+
+      // Complete progress bar to 100% when data is loaded
+      setSyncProgress(100);
+
+      // Brief moment for user to see completed state, then smoothly fade out overlay into the dashboard
+      window.setTimeout(() => {
+        setIsSyncFading(true);
+        window.setTimeout(() => {
+          setIsSyncing(false);
+          setIsSyncFading(false);
+          setIsLongSync(false);
+        }, 280);
+      }, 120);
     }
-  }, [addActivity]);
+  }, [addActivity, clearSyncTimers]);
 
   useEffect(() => {
     loadData();
@@ -251,11 +281,9 @@ export default function Dashboard({
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
-      if (watchdogTimerRef.current) {
-        window.clearTimeout(watchdogTimerRef.current);
-      }
+      clearSyncTimers();
     };
-  }, [loadData]);
+  }, [loadData, clearSyncTimers]);
 
   const handleCreateProject = async () => {
     if (!projectName.trim()) {
@@ -287,9 +315,10 @@ export default function Dashboard({
         time: "Just now",
         type: "project",
       });
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Project creation failed", e);
-      setError(e?.message || "Failed to create project");
+      const msg = e instanceof Error ? e.message : "Failed to create project";
+      setError(msg);
     } finally {
       setCreatingProject(false);
     }
@@ -615,69 +644,94 @@ export default function Dashboard({
   );
 
   return (
-    <div className="w-full flex flex-col gap-6 animate-dashboard-fade">
-      {isSyncing ? (
+    <div className="w-full flex flex-col gap-6 animate-dashboard-fade relative">
+      {/* 1. Transparent Sync Screen Overlay with Backdrop Blur */}
+      {isSyncing && (
         <div
-          key="sync-loading-screen"
-          className={`w-full flex min-h-[450px] items-center justify-center transition-all duration-200 ease-out ${
-            isSyncFading ? "opacity-0 scale-95 filter blur-xs" : "opacity-100 scale-100 filter blur-none"
+          key="sync-loading-overlay"
+          className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xl transition-all duration-300 ease-out select-none ${
+            isSyncFading
+              ? "opacity-0 pointer-events-none scale-[0.99] filter blur-xs"
+              : "opacity-100 pointer-events-auto scale-100 filter blur-none"
           }`}
+          style={{
+            backdropFilter: "blur(24px)",
+            WebkitBackdropFilter: "blur(24px)",
+          }}
         >
-          <div className="flex flex-col items-center gap-3">
-            <Loader2 className="h-7 w-7 animate-spin text-green-400" />
-            <p className="font-mono text-xs uppercase tracking-wider text-white/50">
-              Synchronizing Projects
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div key="dashboard-main-content" className="w-full flex flex-col gap-6 animate-dashboard-fade">
-          {/* 1. Desktop 3-Column Layout (Hidden on Mobile) */}
-          <div className="hidden lg:flex desktop-layout-container w-full flex-row justify-center items-start gap-6 xl:gap-8 mx-auto">
-            {/* Left Rail: Navigation / Project Context */}
-            <aside className="w-[280px] xl:w-[310px] 2xl:w-[320px] shrink-0 sticky top-[106px] lg:top-[110px] space-y-4">
-              {renderLeftRail()}
-            </aside>
+          <div className="flex flex-col items-center gap-3.5 px-6 py-6 rounded-2xl bg-black/50 border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.8)] backdrop-blur-md max-w-[280px] w-full text-center">
+            <Loader2 className="h-6 w-6 animate-spin text-green-400" />
+            <div className="flex flex-col items-center gap-2.5 w-full">
+              <p className="font-mono text-xs font-semibold uppercase tracking-wider text-white/90">
+                Synchronizing Projects
+              </p>
 
-            {/* Center: Main Visual Focus */}
-            {renderCenterStage()}
-
-            {/* Right Rail: System Context & Monitoring */}
-            <aside className="w-[280px] xl:w-[310px] 2xl:w-[320px] shrink-0 sticky top-[106px] lg:top-[110px] space-y-4">
-              {renderRightRail()}
-            </aside>
-          </div>
-
-          {/* 2. Mobile Full-Width Rail Carousel View (Hidden on Desktop) */}
-          <div className="block lg:hidden mobile-layout-container w-full pb-28">
-            {/* Carousel Track with Full-Width Translation Animation (Driven purely by buttons, swiping disabled) */}
-            <div className="w-full min-w-0 max-w-full overflow-hidden">
-              <div
-                className="flex items-start w-full"
-                style={{
-                  transform: `translate3d(-${mobileSlide * 100}%, 0, 0)`,
-                  transition: "transform 0.35s cubic-bezier(0.16, 1, 0.3, 1)",
-                }}
-              >
-                {/* Slide 0: Left Rail (Projects) */}
-                <div className="w-full min-w-full shrink-0">
-                  {renderLeftRail()}
+              {isLongSync && (
+                <div className="flex flex-col items-center gap-2 w-full animate-fade-swift">
+                  <p className="font-mono text-[11px] text-zinc-400 tracking-wide">
+                    Hang on, loading...
+                  </p>
+                  {/* Progress bar matching the width of the syncing projects text */}
+                  <div className="w-full max-w-[175px] h-1.5 rounded-full bg-white/10 overflow-hidden border border-white/5">
+                    <div
+                      className="h-full rounded-full transition-all duration-200 ease-out bg-[var(--theme-accent,#00E676)] shadow-[0_0_10px_var(--theme-accent,rgba(0,230,118,0.5))]"
+                      style={{ width: `${Math.min(100, Math.max(8, syncProgress))}%` }}
+                    />
+                  </div>
                 </div>
-
-                {/* Slide 1: Center Stage (Workspace - Default on Mobile) */}
-                <div className="w-full min-w-full shrink-0">
-                  {renderCenterStage()}
-                </div>
-
-                {/* Slide 2: Right Rail (System) */}
-                <div className="w-full min-w-full shrink-0">
-                  {renderRightRail()}
-                </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
       )}
+
+      {/* 2. Main Dashboard Content (always rendered and blurred underneath during sync) */}
+      <div key="dashboard-main-content" className="w-full flex flex-col gap-6 animate-dashboard-fade">
+        {/* 1. Desktop 3-Column Layout (Hidden on Mobile) */}
+        <div className="hidden lg:flex desktop-layout-container w-full flex-row justify-center items-start gap-6 xl:gap-8 mx-auto">
+          {/* Left Rail: Navigation / Project Context */}
+          <aside className="w-[280px] xl:w-[310px] 2xl:w-[320px] shrink-0 sticky top-[106px] lg:top-[110px] space-y-4">
+            {renderLeftRail()}
+          </aside>
+
+          {/* Center: Main Visual Focus */}
+          {renderCenterStage()}
+
+          {/* Right Rail: System Context & Monitoring */}
+          <aside className="w-[280px] xl:w-[310px] 2xl:w-[320px] shrink-0 sticky top-[106px] lg:top-[110px] space-y-4">
+            {renderRightRail()}
+          </aside>
+        </div>
+
+        {/* 2. Mobile Full-Width Rail Carousel View (Hidden on Desktop) */}
+        <div className="block lg:hidden mobile-layout-container w-full pb-28">
+          {/* Carousel Track with Full-Width Translation Animation (Driven purely by buttons, swiping disabled) */}
+          <div className="w-full min-w-0 max-w-full overflow-hidden">
+            <div
+              className="flex items-start w-full"
+              style={{
+                transform: `translate3d(-${mobileSlide * 100}%, 0, 0)`,
+                transition: "transform 0.35s cubic-bezier(0.16, 1, 0.3, 1)",
+              }}
+            >
+              {/* Slide 0: Left Rail (Projects) */}
+              <div className="w-full min-w-full shrink-0">
+                {renderLeftRail()}
+              </div>
+
+              {/* Slide 1: Center Stage (Workspace - Default on Mobile) */}
+              <div className="w-full min-w-full shrink-0">
+                {renderCenterStage()}
+              </div>
+
+              {/* Slide 2: Right Rail (System) */}
+              <div className="w-full min-w-full shrink-0">
+                {renderRightRail()}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* 3. Floating Bottom Nav Overlay (Portaled directly to document.body for true viewport anchoring) */}
       {typeof document !== "undefined" &&

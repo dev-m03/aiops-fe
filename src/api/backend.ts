@@ -1,8 +1,6 @@
 import { supabase } from "../lib/supabase";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://aiops-api.onrender.com";
-const DEFAULT_TIMEOUT_MS = 8000; // 8s timeout for normal API requests to handle dormant sockets & mobile wakeups
-const AI_TIMEOUT_MS = 25000; // 25s timeout for intensive AI root-cause analysis
 
 export interface Project {
   id: string;
@@ -65,21 +63,25 @@ export interface RequestOptions extends RequestInit {
 }
 
 /**
- * Resilient fetch wrapper with strict timeout enforcement via AbortController.
- * Prevents browser tabs waking from sleep/RAM from hanging indefinitely on dead TCP sockets.
+ * Direct resilient fetch wrapper with optional external abort signal support.
+ * Does not artificially abort requests with strict timeouts.
  */
 async function fetchWithTimeout(
   url: string,
   options: RequestOptions = {}
 ): Promise<Response> {
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, externalSignal, ...fetchOptions } = options;
+  const { timeoutMs, externalSignal, ...fetchOptions } = options;
   const controller = new AbortController();
 
   let isTimedOut = false;
-  const timeoutId = setTimeout(() => {
-    isTimedOut = true;
-    controller.abort();
-  }, timeoutMs);
+  let timeoutId: number | null = null;
+
+  if (timeoutMs && timeoutMs > 0) {
+    timeoutId = window.setTimeout(() => {
+      isTimedOut = true;
+      controller.abort();
+    }, timeoutMs);
+  }
 
   // Link external cancellation signal if provided
   const handleExternalAbort = () => {
@@ -88,7 +90,7 @@ async function fetchWithTimeout(
 
   if (externalSignal) {
     if (externalSignal.aborted) {
-      clearTimeout(timeoutId);
+      if (timeoutId) clearTimeout(timeoutId);
       controller.abort();
     } else {
       externalSignal.addEventListener("abort", handleExternalAbort, { once: true });
@@ -101,13 +103,18 @@ async function fetchWithTimeout(
       signal: controller.signal,
     });
     return response;
-  } catch (err: any) {
-    if (isTimedOut || err?.name === "AbortError") {
+  } catch (err: unknown) {
+    if (isTimedOut && timeoutMs) {
       throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    if (err instanceof DOMException && err.name === "AbortError" && externalSignal?.aborted) {
+      throw err;
     }
     throw err;
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
     if (externalSignal) {
       externalSignal.removeEventListener("abort", handleExternalAbort);
     }
@@ -129,14 +136,8 @@ async function extractErrorMessage(res: Response, fallback: string): Promise<str
   }
 }
 
-async function getAuthHeader(timeoutMs = 4000) {
-  // Enforce quick timeout on auth session retrieval in case of stale Supabase token lock
-  const sessionPromise = supabase.auth.getSession();
-  const timeoutPromise = new Promise<{ data: { session: null } }>((resolve) =>
-    setTimeout(() => resolve({ data: { session: null } }), timeoutMs)
-  );
-
-  const { data } = await Promise.race([sessionPromise, timeoutPromise]);
+async function getAuthHeader() {
+  const { data } = await supabase.auth.getSession();
   const token = data?.session?.access_token;
 
   if (!token) {
@@ -151,7 +152,6 @@ async function getAuthHeader(timeoutMs = 4000) {
 
 export async function checkHealth(signal?: AbortSignal): Promise<{ status: string; service: string }> {
   const res = await fetchWithTimeout(`${BACKEND_URL}/health`, {
-    timeoutMs: 4000,
     externalSignal: signal,
   });
   if (!res.ok) {
@@ -166,7 +166,6 @@ export async function fetchProjects(signal?: AbortSignal): Promise<Project[]> {
   const res = await fetchWithTimeout(`${BACKEND_URL}/projects`, {
     method: "GET",
     headers,
-    timeoutMs: DEFAULT_TIMEOUT_MS,
     externalSignal: signal,
   });
 
@@ -185,7 +184,6 @@ export async function createProject(name: string, signal?: AbortSignal): Promise
     method: "POST",
     headers,
     body: JSON.stringify({ name: name.trim().slice(0, 100) }),
-    timeoutMs: DEFAULT_TIMEOUT_MS,
     externalSignal: signal,
   });
 
@@ -203,7 +201,6 @@ export async function fetchIncidents(signal?: AbortSignal): Promise<Incident[]> 
   const res = await fetchWithTimeout(`${BACKEND_URL}/incidents`, {
     method: "GET",
     headers,
-    timeoutMs: DEFAULT_TIMEOUT_MS,
     externalSignal: signal,
   });
 
@@ -221,7 +218,6 @@ export async function analyzeIncident(incidentId: string, signal?: AbortSignal):
   const res = await fetchWithTimeout(`${BACKEND_URL}/agents/analyze/${incidentId}`, {
     method: "POST",
     headers,
-    timeoutMs: AI_TIMEOUT_MS,
     externalSignal: signal,
   });
 
@@ -240,7 +236,6 @@ export async function ingestLog(payload: LogPayload, signal?: AbortSignal): Prom
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
-    timeoutMs: DEFAULT_TIMEOUT_MS,
     externalSignal: signal,
   });
 
@@ -251,4 +246,3 @@ export async function ingestLog(payload: LogPayload, signal?: AbortSignal): Prom
 
   return res.json();
 }
-
